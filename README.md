@@ -55,8 +55,9 @@ $$
 $\beta_i$ is a *local scale*: it sharpens the weights of node $i$ until
 the node has about $u$ effective neighbors. The entropy decreases as
 $\beta_i$ grows, so $\beta_i$ is found by bisection, independently for
-every node. If all weights of node $i$ are equal, or $u \ge d_i$, the row
-is uniform, $p_{j|i} = 1/d_i$. To avoid overflow, compute
+every node: stop when $|H_i - \log \min(u, d_i)| < 10^{-5}$, or after a
+fixed number of steps. If all weights of node $i$ are equal, or
+$u \ge d_i$, the row is uniform, $p_{j|i} = 1/d_i$. To avoid overflow, compute
 $(w_{ij}/\max_k w_{ik})^{\beta_i}$; the ratio is the same. Finally,
 symmetrize:
 $$
@@ -89,8 +90,9 @@ $$
 The first sum does not depend on $Y$. In the second, $y_i$ appears in the
 terms $(i, j)$ and $(j, i)$, so its derivative is
 $4 \sum_j p_{ij} (1 + d_{ij}^2)^{-1} (y_i - y_j)$. For the last,
-$\partial Z / \partial y_i = -4 \sum_j (1 + d_{ij}^2)^{-2} (y_i - y_j)$.
-Together,
+$\partial \log Z / \partial y_i = (1/Z)\, \partial Z / \partial y_i$, with
+$\partial Z / \partial y_i = -4 \sum_j (1 + d_{ij}^2)^{-2} (y_i - y_j)$
+(again from the terms $(i, j)$ and $(j, i)$). Together,
 $$
 \frac{\partial C}{\partial y_i}
 = 4 \sum_{j} (p_{ij} - q_{ij}) (1 + d_{ij}^2)^{-1} (y_i - y_j)
@@ -105,8 +107,9 @@ $$
 
 **Attraction: a sparse × dense product.** With the sparse matrix
 $A_{ij} = p_{ij}(1 + d_{ij}^2)^{-1}$ (pattern of $P$) and its row sums on a
-diagonal $D$, $F^{\mathrm{attr}} = Y (D - A)$: one product of a sparse
-$n \times n$ matrix with a dense $n \times 2$ matrix, where the entries of
+diagonal $D$, $F^{\mathrm{attr}} = Y (D - A)$, that is,
+$(D - A)\, Y^{\mathsf{T}}$: one product of a sparse $n \times n$ matrix
+with a dense $n \times 2$ matrix, where the entries of
 $A$ are computed on the fly from $P$ and $Y$. Its cost is $O(\mathrm{nnz}(P))$.
 
 **Repulsion: a quadtree and Barnes–Hut.** Computed directly,
@@ -119,7 +122,9 @@ tree from the root. If a cell satisfies
 $$
 \frac{r_{\mathrm{cell}}}{\|y_i - y_{\mathrm{cell}}\|} < \theta,
 $$
-with $r_{\mathrm{cell}}$ the length of the cell's diagonal, all its points act as one:
+with $r_{\mathrm{cell}}$ the length of the cell's diagonal (use the
+diagonal, as written here; some implementations use half the side,
+which accepts larger cells and gives larger errors), all its points act as one:
 the cell adds $N_{\mathrm{cell}}(1 + d^2)^{-2}(y_i - y_{\mathrm{cell}})$
 to the unnormalized repulsion and $N_{\mathrm{cell}}(1 + d^2)^{-1}$ to $Z$,
 where $d = \|y_i - y_{\mathrm{cell}}\|$. Otherwise, open the cell and visit
@@ -169,13 +174,14 @@ without self-loops:
 
 | graph | nodes | edges | degree min / median / max | weights | labels |
 |---|---|---|---|---|---|
-| `k49_norm_10NN` | 38,547 | 309,079 | 10 / 14 / 551 | real | 49 classes |
-| `com-Amazon` | 334,863 | 925,872 | 1 / 4 / 549 | 1 | communities |
+| `k49_norm_10NN` | 38,547 | 309,079 | 10 / 14 / 551 | real | 49 classes, 0–48 |
+| `com-Amazon` | 334,863 | 925,872 | 1 / 4 / 549 | 1 | communities, 5% of nodes (0: none) |
 | `coPapersDBLP` | 540,486 | 15,245,729 | 1 / 34 / 3,299 | 1 | none |
 
 Each graph comes in a MATLAB file (`.mat`, version 7.3, compressed) with
-the sparse matrix `A` ($W$ above) and a vector `label` (0: no label), only
-for coloring pictures.
+the sparse matrix `A` ($W$ above) and a vector `label`, only for
+coloring pictures: the class for `k49_norm_10NN`; for `com-Amazon`, one
+of its top communities, or 0 for the 95% of nodes in none.
 
 **Getting started.** On [github.com/AUTh-CSAL/graph-t-sne](https://github.com/AUTh-CSAL/graph-t-sne),
 click *Use this template* to make your own repository, then open it in a
@@ -183,22 +189,32 @@ GitHub Codespace: the codespace installs gcc,
 [OpenCilk](https://www.opencilk.org), and
 [matio](https://github.com/tbeu/matio). The data are in `data/`. On your
 own Ubuntu 24.04 machine (or WSL), clone your repository and run
-`bash env/setup.sh`. `starter/` has a small C reader for the data
+`bash env/setup.sh`. On macOS, install `libmatio` with
+[Homebrew](https://brew.sh) and OpenCilk's macOS release from
+[opencilk.org](https://www.opencilk.org); use Homebrew's `gcc` (or
+`libomp` with Apple's `clang`) for OpenMP. `starter/` has a small C reader for the data
 (`data.h`) and a program that prints a summary of a graph:
 `./starter/readdata data/k49_norm_10NN`. Use it, or convert the data
 once to a format of your choice.
 
 For each graph we also give the state $Y_0$ at which you compute the
 gradient: `<graph>-Y0.mat` holds `Y0`, a $2 \times n$ matrix (in memory,
-column $i$ is the pair $x_i, y_i$), and the parameters `u` and `theta`.
-$Y_0$ is the state of a full t-SNE run after 300 iterations.
+column $i$ holds the two coordinates of $y_i$), and the parameters `u`
+and `theta`. $Y_0$ is the state of a full t-SNE run after 300
+iterations; compute the plain gradient above at it (t-SNE's early
+iterations multiply $P$ by a constant, the *early exaggeration* of [1];
+not here).
 
 To check your results, `<graph>-ref.mat` holds our $\beta$ (0 where the row is uniform), $F^{\mathrm{attr}}$,
 $F^{\mathrm{rep}}$, and $Z$ at $Y_0$; the repulsion and $Z$ were
-computed with Barnes–Hut at $\theta = 0.1$, close to exact. Compare
-$F^{\mathrm{attr}}$ to round-off. For $F^{\mathrm{rep}}$, report the
-error $\max |x - x_{\mathrm{ref}}| / \max |x_{\mathrm{ref}}|$ and that of
-$Z$; at $\theta = 0.5$ expect around $10^{-2}$ or less. A wrong cell
+computed with Barnes–Hut at $\theta = 0.1$, close to exact. Your
+$\beta$ and $F^{\mathrm{attr}}$ should agree with ours to about $10^{-4}$
+for `k49_norm_10NN` (each $\beta_i$ is found only to the bisection
+tolerance) and to round-off for the unweighted graphs. For
+$F^{\mathrm{rep}}$, report the error
+$\max |x - x_{\mathrm{ref}}| / \max |x_{\mathrm{ref}}|$, and for $Z$ the
+relative error $|Z - Z_{\mathrm{ref}}| / Z_{\mathrm{ref}}$; at
+$\theta = 0.5$ expect around $10^{-2}$ or less. A wrong cell
 size, a forgotten self-interaction, or a wrong normalization gives errors
 near 1.
 
@@ -218,15 +234,17 @@ You may use libraries to read the files and to store sparse matrices,
 but not for the sparse × dense product, the quadtree, or Barnes–Hut,
 and not t-SNE code.
 
-Parallelize steps 1–4 with
+Parallelize the computation in steps 1–4 (not the file reading) with
 [Pthreads](https://hpc-tutorials.llnl.gov/posix/),
 [OpenMP](https://www.openmp.org/specifications/), and
 [OpenCilk](https://www.opencilk.org): three versions, and a sequential
-one to compare against. All four must agree.
+one to compare against. All four must agree. Save your $\beta$,
+$F^{\mathrm{attr}}$, $F^{\mathrm{rep}}$, and $Z$ for each graph in your
+repository.
 
 For `k49_norm_10NN`, also compute the repulsion directly, $O(n^2)$, in
-parallel. Is your Barnes–Hut faster? By how much? Where would the two
-meet as $n$ grows?
+parallel. Is your Barnes–Hut faster? By how much? Below what $n$ is
+the direct sum faster?
 
 **Measure each phase separately**: $P$, attraction, quadtree
 construction, centers of mass, the walk. Report run times against the
@@ -238,8 +256,8 @@ and `coPapersDBLP` has nodes of degree 1 and of degree 3,299.
 Run on any multicore machine you have access to: your laptop, a lab
 machine, or a [GitHub Codespace](https://github.com/features/codespaces)
 (the free monthly quota is counted in core-hours, so develop on 2 cores
-and use 8–16 cores only for the final measurements; one run takes
-seconds). State the machine in your report: processor, cores, hardware
+and switch to a machine with more cores, if your quota allows, only for
+the final measurements; one run takes seconds). State the machine in your report: processor, cores, hardware
 threads, memory, compiler and flags.
 
 ## AI assistants, and what you should take away
@@ -303,7 +321,8 @@ cross appears?)
 ## Afterthought
 
 How did MNIST become a graph? Each image was described by a vector of
-features (a histogram of the directions of its edges, HOG), each image
+features (histograms of the directions in which brightness changes,
+HOG), each image
 was linked to its 100 nearest images in that feature space, and the
 distances $d$ became affinities $w = e^{-d^2}$. A whole process sits
 between the images and the graph, and the picture depends on it. Other
