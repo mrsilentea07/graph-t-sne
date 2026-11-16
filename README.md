@@ -44,14 +44,18 @@ not a distance). Unweighted graphs have $w_{ij} = 1$ on every edge.
 
 For each node $i$, with $d_i$ neighbors, define the conditional
 probabilities over its neighbors
+
 $$
 p_{j|i} = \frac{w_{ij}^{\beta_i}}{\sum_{k} w_{ik}^{\beta_i}}, \qquad (i, j) \in E,
 $$
+
 where the exponent $\beta_i \ge 0$ is chosen so that the row has
 *perplexity* $\min(u, d_i)$:
+
 $$
 H_i = -\sum_j p_{j|i} \log p_{j|i} = \log \min(u, d_i).
 $$
+
 $\beta_i$ is a *local scale*: it sharpens the weights of node $i$ until
 the node has about $u$ effective neighbors. The entropy decreases as
 $\beta_i$ grows, so $\beta_i$ is found by bisection, independently for
@@ -60,9 +64,11 @@ fixed number of steps. If all weights of node $i$ are equal, or
 $u \ge d_i$, the row is uniform, $p_{j|i} = 1/d_i$. To avoid overflow, compute
 $(w_{ij}/\max_k w_{ik})^{\beta_i}$; the ratio is the same. Finally,
 symmetrize:
+
 $$
 p_{ij} = \frac{p_{j|i} + p_{i|j}}{2n}.
 $$
+
 $P$ has the sparsity pattern of $W$, is symmetric, and sums to 1. It is
 computed **once**.
 
@@ -70,35 +76,43 @@ computed **once**.
 
 For points $y_1, \ldots, y_n$ in the plane (a $2 \times n$ matrix $Y$), the
 heavy-tailed Student-t kernel defines
+
 $$
-q_{ij} = \frac{(1 + \|y_i - y_j\|^2)^{-1}}{Z}, \qquad
-Z = \sum_{k \ne l} (1 + \|y_k - y_l\|^2)^{-1}.
+q_{ij} = \frac{(1 + \Vert y_i - y_j\Vert ^2)^{-1}}{Z}, \qquad
+Z = \sum_{k \ne l} (1 + \Vert y_k - y_l\Vert ^2)^{-1}.
 $$
+
 Note that $Q$ is dense: every pair of points interacts. t-SNE finds $Y$
 that minimizes the Kullback–Leibler divergence
+
 $$
-C(Y) = \mathrm{KL}(P \,\|\, Q) = \sum_{i \ne j} p_{ij} \log \frac{p_{ij}}{q_{ij}}.
+C(Y) = \mathrm{KL}(P \thinspace \Vert \thinspace Q) = \sum_{i \ne j} p_{ij} \log \frac{p_{ij}}{q_{ij}}.
 $$
 
 ### The gradient
 
-Write $d_{ij}^2 = \|y_i - y_j\|^2$. Since $\log q_{ij} = -\log(1 + d_{ij}^2) - \log Z$
+Write $d_{ij}^2 = \Vert y_i - y_j\Vert ^2$. Since $\log q_{ij} = -\log(1 + d_{ij}^2) - \log Z$
 and $\sum p_{ij} = 1$,
+
 $$
 C = \sum_{i \ne j} p_{ij} \log p_{ij} + \sum_{i \ne j} p_{ij} \log(1 + d_{ij}^2) + \log Z.
 $$
+
 The first sum does not depend on $Y$. In the second, $y_i$ appears in the
 terms $(i, j)$ and $(j, i)$, so its derivative is
 $4 \sum_j p_{ij} (1 + d_{ij}^2)^{-1} (y_i - y_j)$. For the last,
-$\partial \log Z / \partial y_i = (1/Z)\, \partial Z / \partial y_i$, with
-$\partial Z / \partial y_i = -4 \sum_j (1 + d_{ij}^2)^{-2} (y_i - y_j)$
-(again from the terms $(i, j)$ and $(j, i)$). Together,
+$\partial \log Z / \partial y_i = (1/Z)\thinspace \partial Z / \partial y_i$, with
+$\partial Z / \partial y_i = -4 \sum_j (1 + d_{ij}^2)^{-2} (y_i - y_j)$,
+again from the terms $(i, j)$ and $(j, i)$. Together,
+
 $$
 \frac{\partial C}{\partial y_i}
 = 4 \sum_{j} (p_{ij} - q_{ij}) (1 + d_{ij}^2)^{-1} (y_i - y_j)
 = 4 \left( F^{\mathrm{attr}}_i - F^{\mathrm{rep}}_i \right),
 $$
+
 an attractive force along the edges and a repulsive force among all pairs:
+
 $$
 F^{\mathrm{attr}}_i = \sum_{j : (i,j) \in E} p_{ij} (1 + d_{ij}^2)^{-1} (y_i - y_j),
 \qquad
@@ -108,7 +122,7 @@ $$
 **Attraction: a sparse × dense product.** With the sparse matrix
 $A_{ij} = p_{ij}(1 + d_{ij}^2)^{-1}$ (pattern of $P$) and its row sums on a
 diagonal $D$, $F^{\mathrm{attr}} = Y (D - A)$, that is,
-$(D - A)\, Y^{\mathsf{T}}$: one product of a sparse $n \times n$ matrix
+$(D - A)\thinspace Y^{\mathsf{T}}$: one product of a sparse $n \times n$ matrix
 with a dense $n \times 2$ matrix, where the entries of
 $A$ are computed on the fly from $P$ and $Y$. Its cost is $O(\mathrm{nnz}(P))$.
 
@@ -119,15 +133,17 @@ cells are squares split into four quadrants down to cells with few
 points; each cell keeps the number of its points $N_{\mathrm{cell}}$ and
 their center of mass $y_{\mathrm{cell}}$. For each point $y_i$, walk the
 tree from the root. If a cell satisfies
+
 $$
-\frac{r_{\mathrm{cell}}}{\|y_i - y_{\mathrm{cell}}\|} < \theta,
+\frac{r_{\mathrm{cell}}}{\Vert y_i - y_{\mathrm{cell}}\Vert } < \theta,
 $$
+
 with $r_{\mathrm{cell}}$ the length of the cell's diagonal (use the
 diagonal, as written here; some implementations use half the side,
 which accepts larger cells and gives larger errors), all its points act as one:
 the cell adds $N_{\mathrm{cell}}(1 + d^2)^{-2}(y_i - y_{\mathrm{cell}})$
 to the unnormalized repulsion and $N_{\mathrm{cell}}(1 + d^2)^{-1}$ to $Z$,
-where $d = \|y_i - y_{\mathrm{cell}}\|$. Otherwise, open the cell and visit
+where $d = \Vert y_i - y_{\mathrm{cell}}\Vert $. Otherwise, open the cell and visit
 its children. At a leaf, add its points one by one (except $y_i$ itself).
 Both sums are accumulated in the same walk; divide by $Z$ at the end.
 
@@ -305,7 +321,7 @@ So, besides the code and the measurements:
 
 One gradient does not draw anything. If you are curious, iterate from
 $Y_0$: for every point, $y_i \leftarrow y_i + v_i$, with
-$v_i \leftarrow 0.8\, v_i - 200\, \gamma_i\, g_i$, where $g_i$ is its
+$v_i \leftarrow 0.8\thinspace v_i - 200\thinspace \gamma_i\thinspace g_i$, where $g_i$ is its
 gradient and $\gamma_i$ its gain ($\gamma_i + 0.2$ when
 $g_i \cdot v_i < 0$, $0.8\gamma_i$ otherwise, never below 0.01; start
 with $v_i = 0$, $\gamma_i = 1$). A few hundred iterations, then color the
