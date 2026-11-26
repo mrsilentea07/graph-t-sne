@@ -1,274 +1,109 @@
-\documentclass[10pt,a4paper]{article}
-\usepackage[margin=1.8cm]{geometry}
-\usepackage{graphicx,booktabs,amsmath,microtype,xcolor}
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{graphicx,booktabs,microtype,xcolor,amsmath}
 \usepackage[hidelinks]{hyperref}
 \usepackage{enumitem}
-\usepackage[compact]{titlesec}
-\titlespacing*{\section}{0pt}{6pt}{2pt}
-\titlespacing*{\subsection}{0pt}{4pt}{1pt}
-\setlist{nosep,leftmargin=1.2em}
-\setlength{\parskip}{3pt}\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}\setlength{\parindent}{0pt}
 \newcommand{\code}[1]{\texttt{#1}}
+% grey notes for the parts we have not written yet (remove at the end)
+\newcommand{\todo}[1]{\textcolor{gray}{[TODO: #1]}}
 
-\title{\vspace{-1.6cm}\Large PDS 2026 -- Homework 1: graph t-SNE gradient with Barnes--Hut\\[1pt]
-\normalsize sequential, OpenMP, OpenCilk and Pthreads versions}
-\author{}\date{\vspace{-1.6cm}}
+\title{PDS 2026 -- Homework 1\\[2pt]
+\large The t-SNE gradient on large graphs, in parallel}
+\author{Code and raw data:
+\url{https://github.com/mrsilentea07/graph-t-sne}}
+\date{}
 
 \begin{document}
 \maketitle
 
+% ------------------------------------------------------------
+\section{The problem}
+
+t-SNE draws a graph in the plane. Every node becomes a point, and nodes
+that are connected should end up close to each other.
+
+To get there, t-SNE moves the points a little at a time. The direction of
+each move is the \emph{gradient}, and computing it is the task of this
+homework. On every point act two forces:
+\begin{itemize}
+  \item an \textbf{attraction} towards its neighbours in the graph, and
+  \item a \textbf{repulsion} away from all the other points.
+\end{itemize}
+
+The attraction only follows the edges, so it is cheap. The repulsion
+involves every pair of points: for half a million nodes that is about
+$3\cdot10^{11}$ pairs, which is far too many.
+
+Before the forces, the edge weights are turned into a matrix $P$, which
+says how strongly two neighbours attract each other.
+
+We compute $P$ and the gradient once, at a given starting layout, for the
+three graphs below. We wrote four versions: a sequential one, and parallel
+ones in Pthreads, OpenMP and OpenCilk.
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+graph & nodes & stored edges \\
+\midrule
+\code{k49\_norm\_10NN} & 38{,}547  & 618{,}158 \\
+\code{com-Amazon}      & 334{,}863 & 1{,}851{,}744 \\
+\code{coPapersDBLP}    & 540{,}486 & 30{,}491{,}458 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ------------------------------------------------------------
+\section{Our approach}
+
+The work is done in four steps.
+
+\begin{enumerate}
+  \item \textbf{Compute $P$.} Each node (row) is handled on its own, so
+    the rows are split among the threads.
+
+  \item \textbf{Attraction.} For each node we add up the pull of its
+    neighbours, again one row at a time. Some nodes have 1 neighbour and
+    some have 3{,}299, so the rows are handed out to the threads as they
+    become free, not in fixed blocks.
+
+  \item \textbf{Repulsion (Barnes--Hut).} We put the points in a
+    quadtree. Seen from far away, a group of points acts like a single
+    point at its centre, so we do not visit every pair. This brings the
+    cost down from about $n^2$ to about $n \log n$.
+    The tree is built level by level, and then every point walks the
+    tree on its own, in parallel.
+
+  \item \textbf{Gradient.} We combine the two forces:
+    gradient $= 4\,(\text{attraction} - \text{repulsion})$.
+\end{enumerate}
+
+All the computations are written once, in \code{src/tsne.h}. Each
+parallel version only decides how the loops are divided among the
+threads.
+
+% ------------------------------------------------------------
 \section{Setup}
-\textbf{Machine.} AMD Ryzen 7 6800HS (Zen 3+), 8 cores / 16 hardware threads,
-up to 4.79\,GHz, L2 512\,KiB/core, L3 16\,MiB shared, 16\,GB RAM (laptop; measured read
-bandwidth 10.6\,GB/s on 1 thread, 39\,GB/s peak on 8, \code{scripts/stream.c}), Ubuntu 24.04.
-\textbf{Compilers.} \code{gcc 13.3} \code{-O3 -march=native} (sequential, OpenMP
-\code{-fopenmp}, Pthreads \code{-pthread}); OpenCilk 3.0 \code{clang 19.1.7} \code{-O3 -march=native -fopencilk}.
-No \code{-ffast-math}, so all versions do the same IEEE arithmetic.
-\textbf{Method.} Every phase is timed separately; each configuration is run 7 times
-and we report the median (raw times of every run: \code{results/raw/*.csv}).
-The Pthreads runs were made a day later; OpenMP at $p=16$, re-run then, agreed within 2\%.
-Parameters $u=10$, $\theta=0.5$; leaf capacity $m=16$ (Sec.~\ref{sec:leaf}).
-Threads $p=1\ldots16$; beyond $p=8$ the extra threads are SMT siblings.
-
-\section{Approach}
-\textbf{Code organization.} One header (\code{src/tsne.h}) holds the data
-structures and the \emph{per-row / per-point kernels} (bisection of one row,
-one row of the attraction, the walk of one point, the center of mass of one cell).
-Each backend (\code{tsne\_seq.c}, \code{tsne\_omp.c}, \code{tsne\_cilk.c},
-\code{tsne\_pthreads.c}) contains only the \emph{loops} of every phase, written
-in its own model; the driver \code{main.c} reads the data, times, checks and saves.
-Since the arithmetic per item is shared, the versions agree bit for bit on
-$\beta$ and $F^{\rm attr}$, and to $\le 1.5\cdot10^{-14}$ on $F^{\rm rep}$ and $Z$
-(only the summation order of $Z$ differs; \code{results/agreement.txt}).
-
-\textbf{$P$.} $W$ is symmetric, so the CSC matrix of the file is also its CSR
-(rows sorted). For row $i$ we store $\ell_k=\log(w_{ik}/\max_k w_{ik})\le0$ in the
-output row and bisect on $\beta_i$: $H(\beta)=\log S-\beta\,\sum_k e^{\beta\ell_k}\ell_k/S$,
-$S=\sum_k e^{\beta\ell_k}$; start $\beta=1$, double until the entropy falls below
-$\log u$, then halve the bracket; stop at $|H-\log u|<10^{-5}$ (max 200 steps).
-Rows with $u\ge d_i$ or equal weights are uniform ($\beta_i=0$), so for the
-unweighted graphs the bisection never runs.
-Symmetrization: $p_{ij}=(p_{j|i}+p_{i|j})/2n$, where $p_{i|j}$ is found by a binary
-search of $i$ in the (sorted) row $j$: $O(\mathrm{nnz}\log d)$, no transpose stored.
-
-\textbf{Attraction.} One pass over CSR: row $i$ reads its column indices and $p_{ij}$
-sequentially and $y_j$ by gather, computes $a_{ij}=p_{ij}/(1+d_{ij}^2)$ on the fly
-and accumulates $\sum_j a_{ij}(y_i-y_j)$ in registers. Each row writes only its own
-output, so rows are independent. Cost $O(\mathrm{nnz})$, about 12\,bytes streamed
-per nonzero (4 index + 8 value) plus a 16-byte gather from $Y$ (8.6\,MB for
-coPapersDBLP, fits in L3).
-
-\textbf{Quadtree (adaptive, built from a Morton order).}
-(1)~bounding square; (2)~a 40-bit Morton key per point (20 bits per coordinate,
-the top quadrant digit in the highest bits); (3)~LSD radix sort of (key, index),
-5 passes of 8 bits; (4)~copy the points in sorted order. Now the points of
-\emph{every} cell are a contiguous range $[lo,hi)$ of the sorted array.
-(5)~Build \emph{level by level}: for each cell of level $l$ with more than $m$
-points, the boundaries of its four quadrants are found by 3 binary searches on
-the keys; nonempty children are written contiguously in level $l{+}1$, at offsets
-given by an exclusive scan of the children counts. Depth is capped at 20
-(coincident points stay in one leaf).
-\textbf{Centers of mass} are computed bottom-up, level by level: a leaf sums its points,
-an inner cell combines its children weighted by their counts.
-\textbf{Walk:} for each point an explicit stack (no recursion) from the root;
-a cell is summarized if $\text{diag}^2<\theta^2 d^2$ (diagonal, squared, no sqrt),
-otherwise a leaf is summed point by point skipping the point itself, or the cell
-is opened. A cell containing $y_i$ is never summarized for $\theta<1$, as
-$d\le$ diag. The walk runs in Morton order, so consecutive points visit
-nearly the same cells (cache reuse); $F^{\rm rep}$ is scattered back with the permutation
-and divided by $Z$ at the end.
-
-\textbf{Parallelization.}
-\textbf{Pthreads}: the $P$ threads are created once and kept in a pool; the calling
-thread is thread~0. A \emph{job} is a function that all threads run; \code{run\_job}
-wakes the workers (mutex + condition variable) and returns when all have finished,
-so the end of a job is a barrier. Two loops are built on it: \code{parfor\_dyn}
-(threads take chunks from a shared atomic counter, like \code{schedule(dynamic)})
-and \code{parfor\_stat} ($P$ equal blocks). Reductions use one slot per thread,
-each on its own cache line, summed by thread~0.
-\begin{center}\scriptsize
-\begin{tabular}{@{}llll@{}}\toprule
-Phase & OpenMP & OpenCilk & Pthreads \\ \midrule
-$\beta$, symm., attraction & \code{for schedule(runtime)}, def.\ \code{dynamic,64} & \code{cilk\_for}, grain 64 & \code{parfor\_dyn}, chunk 64 \\
-bounding box & \code{reduction(min/max)} & $4P$ blocks, serial combine & \code{parfor\_stat}, slot/thread \\
-keys, permutation & \code{for static} & \code{cilk\_for} & \code{parfor\_stat} \\
-radix sort & histograms/thread, \code{single} scan, scatter & $4P$ blocks, serial scan & one job, \code{pthread\_barrier}s \\
-tree levels & per level: count, serial scan, create & same, \code{cilk\_for} & same, \code{parfor\_dyn} \\
-centers of mass & \code{omp for} per level & \code{cilk\_for} per level & one job, barrier/level \\
-walk & \code{dynamic,256 reduction(+:Z)} & grain 256, reducer & \code{parfor\_dyn} 256, slot/thread \\
-direct $O(n^2)$ & \code{static reduction(+:Z)} & \code{cilk\_for} + reducer & \code{parfor\_stat}, slot/thread \\ \bottomrule
-\end{tabular}\end{center}
-No locks or atomics touch the data: every parallel loop writes disjoint data,
-and the only reductions are $Z$ and the bounding box (Pthreads uses atomics only for
-the chunk counters, and the mutex only to start and end a job).
+\todo{machine: processor, cores, hardware threads, memory, compiler and flags}
 
 \section{Correctness}
-\begin{center}\small
-\begin{tabular}{@{}lccccc@{}}\toprule
-graph & $\max|\beta-\beta_{\rm ref}|$ & $F^{\rm attr}$ & $F^{\rm rep}$ & $Z$ & gradient \\ \midrule
-\code{k49\_norm\_10NN} & $1.2\cdot10^{-4}$ & $1.3\cdot10^{-5}$ & $9.2\cdot10^{-3}$ & $5.0\cdot10^{-3}$ & $8.2\cdot10^{-3}$ \\
-\code{com-Amazon}      & 0 & $3.4\cdot10^{-15}$ & $8.1\cdot10^{-3}$ & $4.9\cdot10^{-3}$ & $3.0\cdot10^{-3}$ \\
-\code{coPapersDBLP}    & 0 & $3.9\cdot10^{-15}$ & $5.6\cdot10^{-3}$ & $3.6\cdot10^{-3}$ & $2.2\cdot10^{-3}$ \\ \bottomrule
-\end{tabular}\\[2pt]
-{\footnotesize Errors $\max|x-x_{\rm ref}|/\max|x_{\rm ref}|$ ($|Z-Z_{\rm ref}|/Z_{\rm ref}$), $\theta=0.5$, $m=16$; identical for all four versions.}
-\end{center}
-$\beta$ and $F^{\rm attr}$ match to the bisection tolerance (k49) and to round-off
-(unweighted graphs). Our \emph{direct} $O(n^2)$ repulsion on k49 differs from the
-reference ($\theta=0.1$) by only $1.2\cdot10^{-4}$ ($Z$: $8.7\cdot10^{-5}$), which confirms
-both; the Barnes--Hut error at $\theta=0.5$ is $\approx\!5$--$9\cdot10^{-3}$.
-ThreadSanitizer finds no data race in the Pthreads code.
-Results are in \code{results/<graph>-<version>.mat} (\code{beta}, \code{Fattr}, \code{Frep}, \code{Z}, \code{grad}).
+\todo{error vs. the reference for each graph; all four versions agree}
 
 \section{Results}
-\subsection{Leaf capacity}\label{sec:leaf}
-\begin{figure}[t]\centering
-\includegraphics[width=\linewidth]{figs/leafcap_crossover.pdf}
-\vspace{-6pt}\caption{Left: tree build + centers + walk vs leaf capacity $m$. Right: repulsion
-by Barnes--Hut (build+centers+walk) and directly, on evenly spaced subsets of com-Amazon.}
-\label{fig:leaf}\end{figure}
-Fig.~\ref{fig:leaf} (left): small leaves ($m=1$) make a deep tree with many
-cells to visit; large leaves ($m\ge64$) turn into long point-by-point sums
-(at $m=256$ coPapersDBLP is $3\times$ slower than at $m=16$). The optimum is flat
-between $m=8$ and $32$ for all graphs, sequential and parallel; we chose $m=16$
-(leaves hold on average 7 points; each point visits on average 357 / 530 / 563
-cells on the three graphs, at most 747). The error hardly depends on $m$
-($F^{\rm rep}$ error $9.1$--$9.3\cdot10^{-3}$ on k49 for $m\le64$): it is set by $\theta$.
+\todo{time of each phase against threads and against the graph; what limits the speed-up}
 
-\subsection{Scaling with threads}
-\begin{figure}[t]\centering
-\includegraphics[width=\linewidth]{figs/scaling.pdf}
-\vspace{-6pt}\caption{Speedup over the sequential (gcc) code, per phase; last panel: total time.
-Vertical line: 8 physical cores.}\label{fig:scaling}
-\end{figure}
-
-\begin{center}\small
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}l rrrr rrrr rrrr@{}}\toprule
- & \multicolumn{4}{c}{k49\_norm\_10NN} & \multicolumn{4}{c}{com-Amazon} & \multicolumn{4}{c}{coPapersDBLP}\\
- \cmidrule(lr){2-5}\cmidrule(lr){6-9}\cmidrule(l){10-13}
-{[ms]}, $p=16$ & seq & omp & cilk & pthr & seq & omp & cilk & pthr & seq & omp & cilk & pthr\\ \midrule
-$P$          & 73.7 & 9.5 & 9.7 & 9.0 & 54.0 & 7.6 & 7.8 & 8.4 & 845.8 & 125.2 & 123.1 & 123.5 \\
-attraction   & 1.2 & 0.2 & 0.2 & 0.2 & 5.7 & 1.2 & 1.0 & 1.3 & 51.0 & 13.3 & 11.1 & 10.6 \\
-tree build   & 1.4 & 0.3 & 0.7 & 0.7 & 12.4 & 1.9 & 2.5 & 2.8 & 23.6 & 4.5 & 4.9 & 4.9 \\
-centers      & 0.07 & 0.02 & 0.03 & 0.13 & 0.73 & 0.18 & 0.22 & 0.38 & 1.6 & 0.36 & 0.42 & 0.53 \\
-walk         & 48.2 & 6.5 & 6.2 & 6.3 & 570.2 & 73.2 & 69.4 & 73.7 & 927.4 & 125.0 & 118.0 & 125.5 \\ \midrule
-total        & 124.6 & 16.6 & 16.9 & 16.5 & 644.1 & 85.4 & 82.2 & 87.0 & 1850.7 & 270.2 & 258.1 & 268.9 \\
-speedup      & & 7.5 & 7.4 & 7.6 & & 7.5 & 7.8 & 7.4 & & 6.8 & 7.2 & 6.9 \\ \bottomrule
-\end{tabular}\end{center}
-
-\textbf{Walk} ($6.3$--$7.2\times$ at $p=8$, up to $8.2\times$ at 16): the best-scaling phase. Each
-point is independent and compute-bound (about 550 cell visits), the tree (a few MB)
-stays in cache and is shared read-only. Dynamic scheduling of chunks of 256
-consecutive (Morton-ordered) points keeps locality and balances the deeper walks of
-dense regions. Above 8 threads, SMT gives only $\sim$15--20\% more, because two
-threads share one core's floating-point units. OpenCilk's walk is 5--13\% faster;
-the sequential walk compiled with OpenCilk's clang is also 15\% faster than with gcc
-(0.79 vs 0.93\,s on coPapersDBLP), so the difference is the compiler, not the runtime.
-
-\textbf{$P$} ($5.4$--$6.6\times$ at 8, $6.8$--$7.8\times$ at 16): for k49 the bisection
-(compute-bound: one $\exp$ per entry per bisection step) scales well. For the unweighted graphs
-the cost is the symmetrization, a binary search into row $j$ per nonzero: random
-accesses, latency-bound. Its rows differ by $3000\times$ in length (coPapersDBLP: degree
-1 to 3{,}299), and heavy rows are clustered in the numbering: with \code{OMP\_SCHEDULE=static}
-(contiguous blocks) $P$ takes 270\,ms at $p=8$ instead of 157 with \code{dynamic,64}
-($1.7\times$); \code{guided} is as bad as static (its first chunks are huge). On k49
-and com-Amazon, with milder degrees, the schedule makes no difference
-(\code{results/raw/schedule.csv}). Work stealing in OpenCilk balances the same
-way without tuning.
-
-\textbf{Attraction} (only $4.2$--$5.8\times$): it is memory-bound. On coPapersDBLP
-it streams $\approx$366\,MB (indices + $p_{ij}$) in 10.7\,ms at $p=8$, about
-34\,GB/s, 87\% of the 39\,GB/s we measured as the machine's peak read bandwidth
-(reached already at $p=4$--8). More threads cannot help, and $p=16$ is even slightly
-slower, as is the bandwidth test itself (36\,GB/s). k49 and com-Amazon
-are too small (0.2--1\,ms) to amortize the parallel start-up.
-
-\textbf{Tree build and centers} ($4$--$6\times$): radix sort is bandwidth-bound
-(5 passes over keys and indices) and the top levels of the tree have only 1, 4, 16,
-\dots cells, so they run almost serially, as do the scans of the children counts.
-On the small k49 (38k points, 1.4\,ms sequential) OpenCilk's build is slower than
-OpenMP's ($0.7$ vs $0.3$\,ms): 5 passes $\times$ 2 \code{cilk\_for} with tiny
-blocks cost more in spawn/steal overhead than they save. These phases are $<\!2\%$
-of the total, so they do not limit the overall speedup.
-
-\textbf{Across graphs.} The time is dominated by the walk ($\propto n\log n$) and by
-$P$ ($\propto\mathrm{nnz}$): k49 and com-Amazon are walk-dominated; coPapersDBLP
-(56 nonzeros per row) spends equally in $P$ and in the walk. The total speedup at
-$p=8$ is 6.4 / 6.4 / 5.8 (OpenMP), 6.5 / 6.6 / 6.2 (OpenCilk) and 6.4 / 6.1 / 5.8 (Pthreads): lowest on
-coPapersDBLP because its memory-bound phases ($P$, attraction) weigh more.
-
-\textbf{Pthreads vs OpenMP.} Same decomposition, same times: the total is within 2\% of
-OpenMP on all graphs, and on coPapersDBLP no big phase is more than 1\% slower. Pthreads is behind only
-where there are many tiny parallel steps: tree build and centers (centers on com-Amazon:
-0.38 vs 0.18\,ms, 21 levels, each a barrier). We measured an empty job of our pool at
-12 / 20\,$\mu$s ($p=8$ / 16) and a \code{pthread\_barrier} at 5 / 9\,$\mu$s, against
-1.0 / 2.8 and 0.4 / 0.5\,$\mu$s for an OpenMP parallel region and barrier. The cause is
-how threads wait: ours sleep in the kernel (futex) at once, libgomp spins first. With
-\code{OMP\_WAIT\_POLICY=passive} OpenMP costs the same as our pool (12\,$\mu$s per region
-at $p=8$; \code{scripts/overhead.c}). This is about 1\,ms per gradient ($\le 2\%$), so we kept the simple pool
-instead of adding spin-waiting.
-
-\subsection{Barnes--Hut vs direct}
-On k49 ($n=38{,}547$) the direct $O(n^2)$ repulsion takes 1.78\,s sequentially and
-0.28\,s on 8 threads (6.4$\times$; no gain from SMT, it is pure floating point); Barnes--Hut
-(build+centers+walk) takes 0.050\,s and 0.0068\,s (16 threads): \textbf{36--42$\times$ faster},
-with error $9\cdot10^{-3}$. The crossover (Fig.~\ref{fig:leaf}, right) is at
-$n\approx300$--$400$ sequentially and $n\approx1{,}500$ with 16 threads: the direct
-sum parallelizes perfectly, while Barnes--Hut on a small $n$ pays fixed costs
-(5 sort passes, 10+ levels each with a parallel loop). At $n=256{,}000$ Barnes--Hut is
-$\approx200\times$ faster in both cases, and the gap grows as $n/\log n$.
+\todo{Barnes--Hut vs. direct $O(n^2)$ on \code{k49\_norm\_10NN}: how much faster, below what $n$ the direct sum wins}
 
 \section{Predict, then measure}
-From the runs on k49 and com-Amazon only, we predicted coPapersDBLP with models
-fixed from the cost of each phase: $P\propto\mathrm{nnz}$ (rate of com-Amazon,
-also unweighted), attraction $\propto\mathrm{nnz}$ (mean rate of both), build and
-centers $\propto n$, walk $\propto n\log n$ (\code{scripts/predict.py},
-\code{results/prediction.csv}). (In honesty: coPapersDBLP had been run once before,
-to check correctness; the models were not fitted to that run.)
-\begin{center}\small
-\begin{tabular}{@{}lrrrrrr@{}}\toprule
-{[ms]} & \multicolumn{2}{c}{sequential} & \multicolumn{2}{c}{OpenMP $p=8$} & \multicolumn{2}{c}{OpenCilk $p=8$}\\
- & pred. & meas. & pred. & meas. & pred. & meas. \\ \midrule
-$P$          & 889 & 846 & 153 & 157 & 163 & 155 \\
-attraction   & 76  & 51  & 16.8 & 10.7 & 15.8 & 10.8 \\
-tree build   & 20.0 & 23.6 & 3.8 & 4.5 & 3.5 & 4.4 \\
-walk         & 955 & 927 & 147 & 147 & 138 & 128 \\ \midrule
-total        & 1941 & 1851 & 321 & 320 & 322 & 300 \\ \bottomrule
-\end{tabular}\end{center}
-The total is within 7\%, $P$ and the walk within 8\%: the walk cost per point
-grows like $\log n$ (530 $\to$ 563 visits per point). The attraction was
-over-estimated by 50\%: the cost has a part per row (loop start, the write of
-$F_i$, a cache miss on $y_i$) as well as a part per nonzero, and coPapersDBLP has
-56 nonzeros per row against 5.5 (com-Amazon) and 16 (k49), so the per-row part is
-amortized and the cost per nonzero is lower (1.7\,ns against 3.1 and 1.9).
-A model $t=a\,n+b\,\mathrm{nnz}$ would capture this. The build was under-estimated by
-15--20\%: coPapersDBLP's tree has more cells per point (124k for 540k points; com-Amazon:
-63k for 335k), and the larger key arrays probably fit worse in the caches during the sort.
+\todo{prediction for \code{coPapersDBLP} from the two small graphs, the measurement, and why they differ}
 
 \section{One bug}
-The cells are stored level by level and the start of level $l$ is \code{lev[l]};
-the loop that builds level $l{+}1$ writes \code{lev[l+2]}. With a maximum depth of 20
-there can be 21 levels, so \code{lev[22]} is written, but the array had
-\code{TREE\_MAXDEPTH+2}${}=22$ entries. k49 builds only 10 levels and never reaches it,
-but com-Amazon \emph{does}: many of its nodes land on (almost) the same point,
-so the tree goes down to the maximum depth. The results were still correct: the write went past the end
-of the \code{tree\_t} struct, into unused stack memory, so checking against the reference could
-not catch it. We found it by reviewing the loop bounds of the level loop against the maximum depth
-(com-Amazon indeed reports 21 levels), and confirmed it by building the old code with \code{-fsanitize=address}: ASan reports
-\emph{stack-buffer-overflow, WRITE of size 8} in \code{bk\_tree\_build} on com-Amazon
-only. Fix: \code{lev[TREE\_MAXDEPTH+3]}. Lesson: a correct number does not prove
-correct code; corner cases (maximum depth, coincident points) need their own test.
+\todo{one real bug: how we noticed it, found it and fixed it}
 
 \section{Sources and AI assistance}
-L.~van der Maaten, \emph{Accelerating t-SNE using tree-based algorithms}, JMLR 2014;
-Barnes \& Hut, Nature 1986; OpenMP 5 and OpenCilk documentation.
-An AI assistant (Claude, Anthropic) was used to write the code, the scripts
-and a draft of this report, which I checked against the measurements. What it got wrong
-and had to be caught: the overflow of \code{lev[]} above;
-it called \code{\_\_cilkrts\_get\_nworkers()} without including \code{<cilk/cilk\_api.h>}
-(compile error); its first script for the schedule experiment parsed the program's
-output from \code{stdout}, which mixed the CSV with the printed summary; and in the
-Pthreads version it first scaled the direct repulsion by $1/Z$ instead of dividing by $Z$,
-which differs from the other versions in the last bit (caught by reading the code).
+\todo{what AI was used for, and what it got wrong}
 
 \end{document}
