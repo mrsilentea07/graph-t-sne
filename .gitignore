@@ -1,2 +1,13 @@
 starter/readdata
 *.o
+
+# build outputs
+bin/
+# result files (regenerated with -o results); results/raw/*.csv stay
+results/*.mat
+# LaTeX by-products
+report/*.aux
+report/*.log
+report/*.out
+# Python cache
+__pycache__/

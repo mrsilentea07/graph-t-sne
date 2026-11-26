@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/.vscode/cilk-include",
+        "/usr/include/hdf5/serial"
+      ],
+      "defines": [
+        "_Cilk_for=for",
+        "_Cilk_spawn=",
+        "_Cilk_sync=",
+        "_Cilk_scope=",
+        "_Hyperobject(a,b)="
+      ],
+      "compilerPath": "/usr/bin/gcc",
+      "compilerArgs": ["-fopenmp", "-pthread"],
+      "cStandard": "gnu17",
+      "intelliSenseMode": "linux-gcc-x64"
+    }
+  ],
+  "version": 4
+}

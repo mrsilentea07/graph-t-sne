@@ -1,0 +1,31 @@
+{
+  // Ctrl+Shift+B runs the default build task ("build cilk").
+  // Terminal -> Run Task... shows all of them.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build cilk",
+      "type": "shell",
+      "command": "make cilk",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "build all",
+      "type": "shell",
+      "command": "make",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "group": "build"
+    },
+    {
+      "label": "run cilk (k49, 4 workers)",
+      "type": "shell",
+      "command": "CILK_NWORKERS=4 ./bin/tsne_cilk data/k49_norm_10NN -r 3",
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": "build cilk",
+      "problemMatcher": []
+    }
+  ]
+}

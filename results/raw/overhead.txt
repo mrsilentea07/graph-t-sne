@@ -1,0 +1,4 @@
+p= 4  pthreads job 8.9 us, barrier 4.7 us | omp parallel 0.8 us, barrier 0.4 us
+p= 8  pthreads job 11.6 us, barrier 4.9 us | omp parallel 1.0 us, barrier 0.4 us
+p=16  pthreads job 20.0 us, barrier 9.3 us | omp parallel 2.8 us, barrier 0.5 us
+p= 8  pthreads job 12.0 us, barrier 5.2 us | omp parallel 12.5 us, barrier 6.3 us

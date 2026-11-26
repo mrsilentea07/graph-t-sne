@@ -1,0 +1,9 @@
+results/k49_norm_10NN-seq.mat vs results/k49_norm_10NN-omp.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.4e-14 grad 1.2e-14 Z 1.4e-14  -> agree
+results/k49_norm_10NN-seq.mat vs results/k49_norm_10NN-cilk.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.4e-14 grad 1.2e-14 Z 1.3e-14  -> agree
+results/com-Amazon-seq.mat vs results/com-Amazon-omp.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 8.7e-16 grad 4.2e-16 Z 6.4e-16  -> agree
+results/com-Amazon-seq.mat vs results/com-Amazon-cilk.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.7e-15 grad 6.3e-16 Z 1.0e-15  -> agree
+results/coPapersDBLP-seq.mat vs results/coPapersDBLP-omp.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.5e-14 grad 6.1e-15 Z 1.5e-14  -> agree
+results/coPapersDBLP-seq.mat vs results/coPapersDBLP-cilk.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.4e-14 grad 5.6e-15 Z 1.3e-14  -> agree
+results/k49_norm_10NN-seq.mat vs results/k49_norm_10NN-pthreads.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.3e-14 grad 1.2e-14 Z 1.3e-14  -> agree
+results/com-Amazon-seq.mat vs results/com-Amazon-pthreads.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.4e-15 grad 5.3e-16 Z 1.3e-15  -> agree
+results/coPapersDBLP-seq.mat vs results/coPapersDBLP-pthreads.mat: beta 0.0e+00 Fattr 0.0e+00 Frep 1.5e-14 grad 5.9e-15 Z 1.5e-14  -> agree
